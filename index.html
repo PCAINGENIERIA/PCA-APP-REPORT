@@ -157,13 +157,19 @@
   .switch.on .knob{left:29px;background:var(--navy-2);}
 
   /* Photos */
-  .photo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px;}
+  .photo-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:10px;}
+  .photo-item{display:flex;flex-direction:column;gap:6px;}
   .photo-thumb{position:relative;border-radius:10px;overflow:hidden;border:1px solid var(--border);aspect-ratio:1;}
   .photo-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
   .photo-thumb button{
     position:absolute;top:4px;right:4px;background:rgba(11,31,58,.75);color:#fff;border:none;
     width:22px;height:22px;border-radius:50%;font-size:13px;cursor:pointer;line-height:1;
   }
+  .photo-comment{
+    width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid var(--border);
+    font-size:12.5px;font-family:'Inter',sans-serif;background:#FBFCFB;color:var(--navy);
+  }
+  .photo-comment:focus{outline:2px solid var(--green);border-color:var(--green);}
   .photo-add{
     border:1.5px dashed var(--border);border-radius:10px;aspect-ratio:1;display:flex;align-items:center;
     justify-content:center;color:var(--muted);font-size:26px;cursor:pointer;background:#FBFCFB;
@@ -458,6 +464,7 @@ function blankForm(){
     notaFacturacion: "",
     clienteNombreFirma: "",
     firmaCliente: null,
+    firmasAdicionales: [],
     firmaTecnico: null
   };
 }
@@ -786,6 +793,26 @@ function renderForm(){
         </div>
       </div>
 
+      ${f.firmasAdicionales.map(s=>`
+      <div class="card">
+        <div class="section-title">
+          Firma adicional — Cliente
+          <button class="btn btn-ghost btn-sm" onclick="removeFirmante('${s.id}')">Quitar</button>
+        </div>
+        <div class="field">
+          <label>Nombre de quien firma</label>
+          <input type="text" value="${escapeHtml(s.nombre)}" placeholder="Nombre de la persona adicional" oninput="updateFirmanteNombre('${s.id}', this.value)">
+        </div>
+        <div class="sig-wrap"><canvas id="sig-extra-${s.id}"></canvas></div>
+        <div class="sig-actions">
+          <span class="sig-hint">Firma con el dedo o el mouse</span>
+          <button class="btn btn-outline btn-sm" onclick="clearSigExtra('${s.id}')">Borrar</button>
+        </div>
+      </div>
+      `).join("")}
+
+      <button class="btn btn-ghost" style="margin-bottom:14px;" onclick="addFirmante()">+ Agregar otro firmante por parte del cliente</button>
+
       <div class="card">
         <div class="section-title">Firma del técnico</div>
         <div class="sig-wrap"><canvas id="sig-tecnico"></canvas></div>
@@ -825,8 +852,17 @@ function renderLecturaRow(l,i){
   `;
 }
 
-function photoThumb(dataUrl, idx){
-  return `<div class="photo-thumb"><img src="${dataUrl}"><button onclick="removePhoto(${idx})">✕</button></div>`;
+function photoThumb(foto, idx){
+  return `
+    <div class="photo-item">
+      <div class="photo-thumb"><img src="${foto.img}"><button onclick="removePhoto(${idx})">✕</button></div>
+      <input type="text" class="photo-comment" placeholder="Comentario de la foto…" value="${escapeHtml(foto.comentario||'')}" oninput="updatePhotoComment(${idx}, this.value)">
+    </div>
+  `;
+}
+
+function updatePhotoComment(idx, value){
+  if(state.form.fotos[idx]) state.form.fotos[idx].comentario = value;
 }
 
 /* ---- Form field handlers ---- */
@@ -912,7 +948,7 @@ async function handlePhotos(files){
   for(const file of arr){
     try{
       const dataUrl = await compressImage(file);
-      state.form.fotos.push(dataUrl);
+      state.form.fotos.push({id:uid(), img:dataUrl, comentario:""});
     }catch(e){ console.error(e); }
   }
   render();
@@ -929,7 +965,7 @@ function toggleFacturable(){
 
 /* ---- Signature pads ---- */
 const sigPads = {};
-function setupSignaturePad(canvasId, storeKey){
+function setupSignaturePad(canvasId, getVal, setVal){
   const canvas = document.getElementById(canvasId);
   if(!canvas) return;
   const ratio = window.devicePixelRatio || 1;
@@ -946,7 +982,7 @@ function setupSignaturePad(canvasId, storeKey){
   ctx.lineJoin = "round";
 
   // restore existing signature if present
-  const existing = state.form[storeKey];
+  const existing = getVal();
   if(existing){
     const img = new Image();
     img.onload = ()=> ctx.drawImage(img,0,0,rect.width,rect.height);
@@ -961,7 +997,7 @@ function setupSignaturePad(canvasId, storeKey){
   }
   function start(e){ drawing = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); e.preventDefault(); }
   function move(e){ if(!drawing) return; const p = pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); e.preventDefault(); }
-  function end(){ if(!drawing) return; drawing = false; state.form[storeKey] = canvas.toDataURL('image/png'); }
+  function end(){ if(!drawing) return; drawing = false; setVal(canvas.toDataURL('image/png')); }
 
   canvas.addEventListener('mousedown', start);
   canvas.addEventListener('mousemove', move);
@@ -970,12 +1006,9 @@ function setupSignaturePad(canvasId, storeKey){
   canvas.addEventListener('touchmove', move, {passive:false});
   canvas.addEventListener('touchend', end);
 
-  sigPads[storeKey] = { canvas, ctx };
+  sigPads[canvasId] = { canvas, ctx };
 }
-function clearSig(which){
-  const key = which === 'cliente' ? 'firmaCliente' : 'firmaTecnico';
-  const canvasId = which === 'cliente' ? 'sig-cliente' : 'sig-tecnico';
-  state.form[key] = null;
+function clearCanvasVisual(canvasId){
   const canvas = document.getElementById(canvasId);
   if(canvas){
     const rect = canvas.getBoundingClientRect();
@@ -983,6 +1016,30 @@ function clearSig(which){
     ctx.fillStyle = "#fff";
     ctx.fillRect(0,0,rect.width,rect.height);
   }
+}
+function clearSig(which){
+  const key = which === 'cliente' ? 'firmaCliente' : 'firmaTecnico';
+  const canvasId = which === 'cliente' ? 'sig-cliente' : 'sig-tecnico';
+  state.form[key] = null;
+  clearCanvasVisual(canvasId);
+}
+function clearSigExtra(id){
+  const item = state.form.firmasAdicionales.find(s=>s.id===id);
+  if(item) item.firma = null;
+  clearCanvasVisual(`sig-extra-${id}`);
+}
+
+function addFirmante(){
+  state.form.firmasAdicionales.push({id:uid(), nombre:"", firma:null});
+  render();
+}
+function removeFirmante(id){
+  state.form.firmasAdicionales = state.form.firmasAdicionales.filter(s=>s.id!==id);
+  render();
+}
+function updateFirmanteNombre(id, value){
+  const item = state.form.firmasAdicionales.find(s=>s.id===id);
+  if(item) item.nombre = value;
 }
 
 /* ---- Generar reporte ---- */
@@ -1041,6 +1098,7 @@ async function generarReporte(){
       notaFacturacion: f.notaFacturacion,
       clienteNombreFirma: f.clienteNombreFirma,
       firmaCliente: f.firmaCliente,
+      firmasAdicionales: f.firmasAdicionales.filter(s=>s.nombre || s.firma),
       firmaTecnico: f.firmaTecnico,
       creadoEn: new Date().toISOString()
     };
@@ -1182,7 +1240,7 @@ function renderViewBody(){
     ${r.fotos && r.fotos.length ? `
     <div class="card">
       <div class="section-title">Fotografías</div>
-      <div class="photo-grid">${r.fotos.map(p=>`<div class="photo-thumb"><img src="${p}"></div>`).join("")}</div>
+      <div class="photo-grid">${r.fotos.map(f=>`<div class="photo-item"><div class="photo-thumb"><img src="${f.img}"></div>${f.comentario?`<div class="view-text" style="font-size:12.5px;">${escapeHtml(f.comentario)}</div>`:``}</div>`).join("")}</div>
     </div>` : ``}
 
     <div class="card">
@@ -1195,6 +1253,10 @@ function renderViewBody(){
       <div class="section-title">Firmas</div>
       <label>Cliente ${r.clienteNombreFirma ? "— " + escapeHtml(r.clienteNombreFirma) : ""}</label>
       <div class="sig-wrap" style="margin-bottom:14px;"><img src="${r.firmaCliente}" style="width:100%;display:block;"></div>
+      ${(r.firmasAdicionales||[]).map(s=>`
+        <label>Firma adicional ${s.nombre ? "— " + escapeHtml(s.nombre) : ""}</label>
+        <div class="sig-wrap" style="margin-bottom:14px;">${s.firma?`<img src="${s.firma}" style="width:100%;display:block;">`:`<div class="empty" style="padding:14px;">Sin firma</div>`}</div>
+      `).join("")}
       <label>Técnico — ${escapeHtml(r.tecnico)}</label>
       <div class="sig-wrap"><img src="${r.firmaTecnico}" style="width:100%;display:block;"></div>
     </div>
@@ -1365,43 +1427,72 @@ async function generarPDF(r, opts){
   sectionTitle("Facturación");
   fieldPair(["Aprobado para facturar","Nota"], [r.facturable ? "Sí" : "No", r.notaFacturacion || "—"]);
 
-  // Photos
-  async function addPhotoSection(title, photos){
-    if(!photos || !photos.length) return;
-    sectionTitle(title);
-    const perRow = 3, gap = 10;
+  // Fotografías: siempre inician en una hoja nueva, con comentario debajo de cada una.
+  if(r.fotos && r.fotos.length){
+    doc.addPage();
+    y = 40;
+    sectionTitle("Fotografías");
+    const perRow = 2, gap = 16;
     const imgW = (pageW - margin*2 - gap*(perRow-1))/perRow;
-    const imgH = imgW*0.75;
-    let x = margin;
-    let rowMaxH = 0;
-    checkPageBreak(imgH+10);
-    photos.forEach((p,i)=>{
-      if(i>0 && i%perRow===0){ y += imgH+gap; x = margin; checkPageBreak(imgH+10); }
-      try{ doc.addImage(p, 'JPEG', x, y, imgW, imgH); }catch(e){}
-      x += imgW+gap;
-      rowMaxH = imgH;
-    });
-    y += rowMaxH + 20;
-  }
-  await addPhotoSection("Fotografías", r.fotos);
+    const imgH = imgW*0.72;
 
-  // Signatures
+    for(let i=0;i<r.fotos.length;i+=perRow){
+      const rowItems = r.fotos.slice(i, i+perRow);
+      const commentLines = rowItems.map(f=> f.comentario ? doc.splitTextToSize(f.comentario, imgW) : []);
+      const maxLines = Math.max(0, ...commentLines.map(l=>l.length));
+      const rowH = imgH + 10 + (maxLines*11) + 16;
+      checkPageBreak(rowH);
+      rowItems.forEach((foto, idx)=>{
+        const x = margin + idx*(imgW+gap);
+        try{ doc.addImage(foto.img, 'JPEG', x, y, imgW, imgH); }catch(e){}
+        if(commentLines[idx].length){
+          doc.setFont("helvetica","normal"); doc.setFontSize(8.5); doc.setTextColor(...gray);
+          doc.text(commentLines[idx], x, y+imgH+12);
+        }
+      });
+      y += rowH;
+    }
+  }
+
+  // Firmas de conformidad: siempre en una hoja nueva, iniciando a la mitad de la hoja.
+  doc.addPage();
+  const pageH = doc.internal.pageSize.getHeight();
+  y = pageH/2;
   sectionTitle("Firmas de conformidad");
-  checkPageBreak(110);
+
+  const firmantes = [
+    { label: r.clienteNombreFirma || "Cliente", sub: "Firma de conformidad — Cliente", img: r.firmaCliente }
+  ];
+  (r.firmasAdicionales||[]).forEach(s=>{
+    firmantes.push({ label: s.nombre || "Firmante adicional", sub: "Firma adicional — Cliente", img: s.firma });
+  });
+  firmantes.push({ label: r.tecnico, sub: "Firma — Técnico responsable", img: r.firmaTecnico });
+
   const sigW = (pageW-margin*2-20)/2;
-  try{ doc.addImage(r.firmaCliente, 'PNG', margin, y, sigW, 70); }catch(e){}
-  try{ doc.addImage(r.firmaTecnico, 'PNG', margin+sigW+20, y, sigW, 70); }catch(e){}
-  y += 74;
-  doc.setDrawColor(200,200,200);
-  doc.line(margin, y, margin+sigW, y);
-  doc.line(margin+sigW+20, y, margin+sigW*2+20, y);
-  y += 12;
-  doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(...navy);
-  doc.text(r.clienteNombreFirma || "Cliente", margin, y);
-  doc.text(r.tecnico, margin+sigW+20, y);
-  doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(...gray);
-  doc.text("Firma de conformidad — Cliente", margin, y+11);
-  doc.text("Firma — Técnico responsable", margin+sigW+20, y+11);
+  for(let i=0;i<firmantes.length;i+=2){
+    const pair = [firmantes[i], firmantes[i+1]];
+    checkPageBreak(110);
+    pair.forEach((fm, idx)=>{
+      if(!fm) return;
+      const x = margin + idx*(sigW+20);
+      if(fm.img){ try{ doc.addImage(fm.img, 'PNG', x, y, sigW, 70); }catch(e){} }
+      doc.setDrawColor(200,200,200);
+      doc.line(x, y+74, x+sigW, y+74);
+      doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(...navy);
+      doc.text(fm.label, x, y+86);
+      doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(...gray);
+      doc.text(fm.sub, x, y+97);
+    });
+    y += 112;
+  }
+
+  // Pie de página: número de página consecutivo en todas las hojas.
+  const totalPages = doc.internal.getNumberOfPages();
+  for(let p=1;p<=totalPages;p++){
+    doc.setPage(p);
+    doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(...gray);
+    doc.text(`Página ${p} de ${totalPages}`, pageW/2, pageH-20, {align:"center"});
+  }
 
   if(opts.returnBlobInstead){
     return doc.output('blob');
@@ -1412,8 +1503,14 @@ async function generarPDF(r, opts){
 /* ============ AFTER RENDER ============ */
 function afterRender(){
   if(state.view === "nuevo"){
-    setupSignaturePad('sig-cliente','firmaCliente');
-    setupSignaturePad('sig-tecnico','firmaTecnico');
+    setupSignaturePad('sig-cliente', ()=>state.form.firmaCliente, (v)=>{ state.form.firmaCliente = v; });
+    setupSignaturePad('sig-tecnico', ()=>state.form.firmaTecnico, (v)=>{ state.form.firmaTecnico = v; });
+    state.form.firmasAdicionales.forEach(s=>{
+      setupSignaturePad(`sig-extra-${s.id}`,
+        ()=> (state.form.firmasAdicionales.find(x=>x.id===s.id)||{}).firma,
+        (v)=>{ const item = state.form.firmasAdicionales.find(x=>x.id===s.id); if(item) item.firma = v; }
+      );
+    });
   }
 }
 
