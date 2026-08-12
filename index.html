@@ -873,9 +873,14 @@ function onTecnicoChange(value){
   if(value !== "__libre__") state.form.tecnicoLibre = "";
   onTecnicoResolved();
 }
+let _libreDebounce = null;
 function onTecnicoLibre(value){
+  // Solo actualizamos el valor mientras se escribe (sin volver a pintar el
+  // formulario), para no interrumpir al técnico letra por letra.
   state.form.tecnicoLibre = value;
-  onTecnicoResolved();
+  state.form._draftLoadedFor = null;
+  clearTimeout(_libreDebounce);
+  _libreDebounce = setTimeout(()=>{ onTecnicoResolved(); }, 700);
 }
 async function onTecnicoResolved(){
   const nombre = getSelectedTecnico();
@@ -1329,20 +1334,23 @@ async function generarPDF(r, opts){
   }
 
   // Header
-  try{ doc.addImage(LOGO_SRC, 'PNG', margin, y, 34, 34); }catch(e){}
-  doc.setFont("helvetica","bold"); doc.setFontSize(13); doc.setTextColor(...navy);
-  doc.text("PCA Ingeniería & Automatización", margin+42, y+14);
-  doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(...gray);
-  doc.text("Servicios & Mantenimiento", margin+42, y+27);
+  const logoW = 240, logoH = 64;
+  try{ doc.addImage(LOGO_SRC, 'PNG', margin, y, logoW, logoH); }catch(e){}
 
   doc.setFont("helvetica","bold"); doc.setFontSize(15); doc.setTextColor(...navy);
-  doc.text("REPORTE TÉCNICO", pageW-margin, y+14, {align:"right"});
+  doc.text("REPORTE TÉCNICO", pageW-margin, y+26, {align:"right"});
   doc.setFillColor(...navy);
-  doc.roundedRect(pageW-margin-140, y+22, 140, 18, 9, 9, 'F');
+  doc.roundedRect(pageW-margin-140, y+34, 140, 18, 9, 9, 'F');
   doc.setFont("courier","bold"); doc.setFontSize(9.5); doc.setTextColor(255,255,255);
-  doc.text(r.folio, pageW-margin-70, y+34, {align:"center"});
+  doc.text(r.folio, pageW-margin-70, y+46, {align:"center"});
 
-  y += 50;
+  y += logoH + 18;
+  doc.setFont("helvetica","bold"); doc.setFontSize(13); doc.setTextColor(...navy);
+  doc.text("PCA Ingeniería & Automatización", margin, y);
+  doc.setFont("helvetica","normal"); doc.setFontSize(9.5); doc.setTextColor(...gray);
+  doc.text("Servicios & Mantenimiento", margin, y+15);
+
+  y += 26;
   doc.setDrawColor(...green); doc.setLineWidth(2);
   doc.line(margin, y, pageW-margin, y);
   y += 20;
